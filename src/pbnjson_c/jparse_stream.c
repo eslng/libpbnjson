@@ -19,6 +19,7 @@
 #include <jparse_stream.h>
 #include <jobject.h>
 #include <yajl/yajl_parse.h>
+#include <yajl/yajl_version.h>
 #include "liblog.h"
 #include "jparse_stream_internal.h"
 #include "jobject_internal.h"
@@ -499,10 +500,10 @@ typedef int(* 	pj_yajl_null )(void *ctx);
 typedef int(* 	pj_yajl_boolean )(void *ctx, int boolVal);
 typedef int(* 	pj_yajl_integer )(void *ctx, long integerVal);
 typedef int(* 	pj_yajl_double )(void *ctx, double doubleVal);
-typedef int(* 	pj_yajl_number )(void *ctx, const char *numberVal, unsigned int numberLen);
-typedef int(* 	pj_yajl_string )(void *ctx, const unsigned char *stringVal, unsigned int stringLen);
+typedef int(* 	pj_yajl_number )(void *ctx, const char *numberVal, size_t numberLen);
+typedef int(* 	pj_yajl_string )(void *ctx, const unsigned char *stringVal, size_t stringLen);
 typedef int(* 	pj_yajl_start_map )(void *ctx);
-typedef int(* 	pj_yajl_map_key )(void *ctx, const unsigned char *key, unsigned int stringLen);
+typedef int(* 	pj_yajl_map_key )(void *ctx, const unsigned char *key, size_t stringLen);
 typedef int(* 	pj_yajl_end_map )(void *ctx);
 typedef int(* 	pj_yajl_start_array )(void *ctx);
 typedef int(* 	pj_yajl_end_array )(void *ctx);
@@ -544,7 +545,7 @@ static int my_bounce_start_map(void *ctxt)
 	DEREF_CALLBACK(spring->m_handlers->yajl_start_map, ctxt);
 }
 
-static int my_bounce_map_key(void *ctxt, const unsigned char *str, unsigned int strLen)
+static int my_bounce_map_key(void *ctxt, const unsigned char *str, size_t strLen)
 {
 	bounce_breakpoint();
 	PJ_LOG_TRACE("%.*s", strLen, str);
@@ -624,7 +625,7 @@ static int my_bounce_end_array(void *ctxt)
 	DEREF_CALLBACK(spring->m_handlers->yajl_end_array, ctxt);
 }
 
-static int my_bounce_string(void *ctxt, const unsigned char *str, unsigned int strLen)
+static int my_bounce_string(void *ctxt, const unsigned char *str, size_t strLen)
 {
 	bounce_breakpoint();
 	PJ_LOG_TRACE("%.*s", strLen, str);
@@ -755,7 +756,7 @@ static bool jsax_parse_internal(PJSAXCallbacks *parser, raw_buffer input, JSchem
 		NULL, // yajl_integer
 		NULL, // yajl_double
 		(pj_yajl_number)parser->m_number, // yajl_number
-		(pj_yajl_string)parser->m_string, // yajl_stirng
+		(pj_yajl_string)parser->m_string, // yajl_string
 		(pj_yajl_start_map)parser->m_objStart, // yajl_start_map
 		(pj_yajl_map_key)parser->m_objKey, // yajl_map_key
 		(pj_yajl_end_map)parser->m_objEnd, // yajl_end_map
@@ -763,10 +764,12 @@ static bool jsax_parse_internal(PJSAXCallbacks *parser, raw_buffer input, JSchem
 		(pj_yajl_end_array)parser->m_arrEnd, // yajl_end_array
 	};
 
+#if YAJL_MAJOR == 1
 	yajl_parser_config yajl_opts = {
 		comments, // comments are not allowed
 		0, // currently only UTF-8 will be supported for input.
 	};
+#endif
 
 	PJSAXContext internalCtxt = {
 		.ctxt = (ctxt != NULL ? *ctxt : NULL),
@@ -782,7 +785,11 @@ static bool jsax_parse_internal(PJSAXCallbacks *parser, raw_buffer input, JSchem
 	}
 #endif
 
+#if YAJL_MAJOR == 2
+	yajl_handle handle = yajl_alloc(&my_bounce, NULL, &internalCtxt);
+#else
 	yajl_handle handle = yajl_alloc(&my_bounce, &yajl_opts, NULL, &internalCtxt);
+#endif
 
 	parseResult = yajl_parse(handle, (unsigned char *)input.m_str, input.m_len);
 	if (ctxt != NULL) *ctxt = jsax_getContext(&internalCtxt);
@@ -795,11 +802,13 @@ static bool jsax_parse_internal(PJSAXCallbacks *parser, raw_buffer input, JSchem
 				goto parse_failure;
 			PJ_LOG_WARN("Client claims they handled an unknown error in '%.*s'", (int)input.m_len, input.m_str);
 			break;
+#if YAJL_MAJOR == 1
 		case yajl_status_insufficient_data:
 			if (ERR_HANDLER_FAILED(schemaInfo->m_errHandler, m_parser, &internalCtxt))
 				goto parse_failure;
 			PJ_LOG_WARN("Client claims they handled incomplete JSON input provided '%.*s'", (int)input.m_len, input.m_str);
 			break;
+#endif
 		case yajl_status_error:
 		default:
 			if (ERR_HANDLER_FAILED(schemaInfo->m_errHandler, m_unknown, &internalCtxt))
